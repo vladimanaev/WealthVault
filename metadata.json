@@ -1,0 +1,5 @@
+{
+  "name": "WealthVault",
+  "description": "A sophisticated investment projection tool for portfolios, allowing users to track current holdings and run long-term compound interest simulations with real-time stock data lookups via Gemini.",
+  "requestFramePermissions": []
+}
