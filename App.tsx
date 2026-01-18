@@ -4,6 +4,7 @@ import { StockHolding, ProjectionParams, ProjectionDataPoint, ExchangeRates } fr
 import { fetchMarketData, fetchTickerList, TickerGroup, fetchExchangeRates } from './services/geminiService';
 import PortfolioCard from './components/PortfolioCard';
 import ProjectionChart from './components/ProjectionChart';
+import AllocationAnalytics from './components/AllocationAnalytics';
 import { 
   Plus, 
   TrendingUp, 
@@ -29,7 +30,8 @@ import {
   ZapOff,
   Zap,
   AlertTriangle,
-  Scale
+  Scale,
+  PieChart as PieIcon
 } from 'lucide-react';
 
 interface GoogleUser {
@@ -92,7 +94,8 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadTickers = async () => {
       const cached = localStorage.getItem(CACHE_KEY_TICKERS);
-      if (cached) {
+      // Fix: Ensure cached is a string before JSON.parse
+      if (typeof cached === 'string' && cached !== '') {
         try {
           const parsed = JSON.parse(cached) as TickerGroup[];
           setTickerGroups(parsed);
@@ -273,14 +276,13 @@ const App: React.FC = () => {
     
     holdings.forEach(h => {
       const val = h.shares * getConvertedPrice(h.nativePrice || h.currentPrice, h.originalCurrency || currency, currency);
-      // Heuristic for stable assets: Bond, Gilts, Gold, Cash
       const isStable = /BOND|GILT|GOLD|CASH|VAGS|IGLT|VGOV/i.test(h.symbol);
       if (isStable) bondVal += val;
       else stockVal += val;
     });
 
     const total = stockVal + bondVal || 1;
-    return { stockPct: stockVal / total, bondPct: bondVal / total };
+    return { stockPct: stockVal / total, bondPct: bondVal / total, stockVal, bondVal };
   }, [holdings, currency, exchangeRates]);
 
   const totalMonthlyContribution = useMemo(() => 
@@ -327,8 +329,6 @@ const App: React.FC = () => {
       }
 
       if (scenariosActive && i > 0 && i % crashFrequency === 0) {
-        // Weighted Crash: 
-        // stockPct * (severity * riskSplit/100) + bondPct * (severity * (1-riskSplit/100))
         const stockCrashPart = portfolioMix.stockPct * (crashSeverity * (riskSplit / 100));
         const bondCrashPart = portfolioMix.bondPct * (crashSeverity * ((100 - riskSplit) / 100));
         const totalImpact = stockCrashPart + bondCrashPart;
@@ -473,7 +473,7 @@ const App: React.FC = () => {
       {isProfileModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setIsProfileModalOpen(false)} />
-          <div className="relative bg-white w-full max-w-sm rounded-[32px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="relative bg-white w-full max-sm rounded-[32px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="bg-indigo-600 h-24 relative">
               <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
                 <X className="w-4 h-4" />
@@ -612,6 +612,21 @@ const App: React.FC = () => {
         </div>
 
         <div className="lg:col-span-8 space-y-6">
+          <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                <PieIcon className="w-4 h-4" />
+              </div>
+              <h2 className="text-sm font-bold text-slate-900">Allocation Analytics</h2>
+            </div>
+            <AllocationAnalytics 
+              holdings={holdings} 
+              exchangeRates={exchangeRates} 
+              baseCurrency={currency} 
+              currencySymbol={curSym} 
+            />
+          </section>
+
           <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
             <div className="flex items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-2">
