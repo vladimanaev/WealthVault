@@ -1,7 +1,7 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { StockHolding, ProjectionParams, ProjectionDataPoint, ExchangeRates } from './types';
 import { fetchMarketData, fetchTickerList, TickerGroup, fetchExchangeRates } from './services/geminiService';
+import { db } from './services/db';
 import PortfolioCard from './components/PortfolioCard';
 import ProjectionChart from './components/ProjectionChart';
 import AllocationAnalytics from './components/AllocationAnalytics';
@@ -32,7 +32,9 @@ import {
   AlertTriangle,
   Scale,
   PieChart as PieIcon,
-  CloudUpload
+  CloudUpload,
+  Database,
+  Info
 } from 'lucide-react';
 
 interface GoogleUser {
@@ -59,6 +61,7 @@ const App: React.FC = () => {
   const [exchangeRates, setExchangeRates] = useState<ExchangeRates>({ GBP: 1, USD: 1.25, EUR: 1.18 });
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [tickerGroups, setTickerGroups] = useState<TickerGroup[]>([]);
   const [isRefreshingAll, setIsRefreshingAll] = useState(false);
@@ -66,11 +69,10 @@ const App: React.FC = () => {
   const [isLogFormOpen, setIsLogFormOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   
-  // Scenario State
   const [scenariosActive, setScenariosActive] = useState(false);
   const [crashFrequency, setCrashFrequency] = useState(10); 
   const [crashSeverity, setCrashSeverity] = useState(20); 
-  const [riskSplit, setRiskSplit] = useState(80); // % of crash hitting Stocks vs Bonds
+  const [riskSplit, setRiskSplit] = useState(80);
 
   const curSym = CURRENCY_MAP[currency].symbol;
 
@@ -84,7 +86,11 @@ const App: React.FC = () => {
     const savedUser = localStorage.getItem('vault_user');
     const savedCurrency = localStorage.getItem('vault_preferred_currency');
     if (savedUser) setUser(JSON.parse(savedUser));
-    if (savedCurrency) setCurrency(savedCurrency as Currency);
+    
+    // Fix: Cast the string retrieved from localStorage to the Currency type after checking it's a valid value.
+    if (savedCurrency && (savedCurrency === 'GBP' || savedCurrency === 'USD' || savedCurrency === 'EUR')) {
+      setCurrency(savedCurrency as Currency);
+    }
     setAuthLoading(false);
   }, []);
 
@@ -99,39 +105,19 @@ const App: React.FC = () => {
         try {
           const parsed = JSON.parse(cached) as TickerGroup[];
           setTickerGroups(parsed);
-          silentRefreshTickers();
           return;
         } catch (e) {
           console.error("Cache corrupted");
         }
       }
-
-      const instantFallbacks: TickerGroup[] = [
-        { group: "Global Equity", options: [{ value: "VWRP", label: "VWRP - Vanguard FTSE All-World" }, { value: "SWDA", label: "SWDA - iShares Core MSCI World" }] },
-        { group: "US Equity", options: [{ value: "VUSA", label: "VUSA - Vanguard S&P 500" }, { value: "AAPL", label: "AAPL - Apple Inc." }] },
-        { group: "Bonds & Alternatives", options: [{ value: "VAGS", label: "VAGS - Global Aggregate Bond" }, { value: "IGLT", label: "IGLT - UK Gilts ETF" }] }
-      ];
-      
-      setTickerGroups(instantFallbacks);
       try {
         const list = await fetchTickerList();
         setTickerGroups(list);
         localStorage.setItem(CACHE_KEY_TICKERS, JSON.stringify(list));
       } catch (err) {
-        console.error("Failed to fetch fresh tickers", err);
+        console.error("Failed to fetch tickers", err);
       }
     };
-
-    const silentRefreshTickers = async () => {
-      try {
-        const list = await fetchTickerList();
-        setTickerGroups(list);
-        localStorage.setItem(CACHE_KEY_TICKERS, JSON.stringify(list));
-      } catch (e: any) { 
-        console.error("Silent ticker refresh failed:", e?.message || String(e));
-      }
-    };
-
     loadTickers();
   }, []);
 
@@ -142,45 +128,39 @@ const App: React.FC = () => {
       return;
     }
 
-    const loadUserDataFromVault = async () => {
+    const loadUserDataFromDB = async () => {
       setIsInitialLoad(true);
       setIsSyncing(true);
       try {
-        await new Promise(r => setTimeout(r, 800));
-        const userPartitionKey = `vault_data_${user.sub}`;
-        const savedData = localStorage.getItem(userPartitionKey);
-        let loadedHoldings: StockHolding[] = [];
-        if (savedData) {
-          loadedHoldings = JSON.parse(savedData);
-          setHoldings(loadedHoldings);
-        } else {
-          setHoldings([]);
-        }
+        const loadedHoldings = await db.getHoldings(user.sub);
+        setHoldings(loadedHoldings);
         setIsLogFormOpen(loadedHoldings.length === 0);
+        setLastSaved(new Date().toLocaleTimeString());
       } catch (err) {
-        console.error("Critical: Failed to fetch user ledger from vault", err);
+        console.error("Critical: Failed to fetch from database", err);
       } finally {
         setIsInitialLoad(false);
         setIsSyncing(false);
       }
     };
 
-    loadUserDataFromVault();
+    loadUserDataFromDB();
   }, [user]);
 
   useEffect(() => {
     if (isInitialLoad || !user) return;
-    const syncToPrivateVault = async () => {
+    const syncToDatabase = async () => {
       setIsSyncing(true);
       try {
-        const userPartitionKey = `vault_data_${user.sub}`;
-        localStorage.setItem(userPartitionKey, JSON.stringify(holdings));
-        await new Promise(r => setTimeout(r, 300));
+        await db.saveHoldings(user.sub, holdings);
+        setLastSaved(new Date().toLocaleTimeString());
+      } catch (err) {
+        console.error("Failed to sync to database", err);
       } finally {
         setIsSyncing(false);
       }
     };
-    const debounceTimer = setTimeout(syncToPrivateVault, 400);
+    const debounceTimer = setTimeout(syncToDatabase, 400);
     return () => clearTimeout(debounceTimer);
   }, [holdings, isInitialLoad, user]);
 
@@ -261,7 +241,7 @@ const App: React.FC = () => {
       else stockVal += val;
     });
     const total = stockVal + bondVal || 1;
-    return { stockPct: stockVal / total, bondPct: bondVal / total, stockVal, bondVal };
+    return { stockPct: stockVal / total, bondPct: bondVal / total };
   }, [holdings, currency, exchangeRates]);
 
   const totalMonthlyContribution = useMemo(() => 
@@ -292,28 +272,20 @@ const App: React.FC = () => {
     const data: ProjectionDataPoint[] = [];
     let runningTotal = currentTotalValue;
     let runningContributions = 0;
-    
-    // Day 0
     data.push({ year: 0, principal: currentTotalValue, totalValue: currentTotalValue, contributions: 0 });
-    
     for (let i = 1; i <= projection.years; i++) {
       const annualRate = projection.annualReturnRate / 100;
-      const monthlyRate = Math.pow(1 + annualRate, 1/12) - 1; // Effective monthly rate for CAGR accuracy
-      
+      const monthlyRate = Math.pow(1 + annualRate, 1/12) - 1;
       for (let m = 0; m < 12; m++) {
-        // Apply monthly growth and then add contribution
         runningTotal = (runningTotal * (1 + monthlyRate)) + totalMonthlyContribution;
         runningContributions += totalMonthlyContribution;
       }
-      
-      // Black Swan Event Check
       if (scenariosActive && i > 0 && i % crashFrequency === 0) {
         const stockCrashPart = portfolioMix.stockPct * (crashSeverity * (riskSplit / 100));
         const bondCrashPart = portfolioMix.bondPct * (crashSeverity * ((100 - riskSplit) / 100));
         const totalImpactPct = stockCrashPart + bondCrashPart;
         runningTotal = runningTotal * (1 - (totalImpactPct / 100));
       }
-      
       data.push({
         year: i,
         principal: currentTotalValue,
@@ -331,8 +303,6 @@ const App: React.FC = () => {
       const marketData = await fetchMarketData(newSymbol);
       const assetPrice = marketData?.price || 1;
       const assetCurrency = marketData?.currency || 'USD';
-      
-      // Ensure totalPaid is converted back to base if it was entered in UI currency
       const newHolding: StockHolding = {
         id: `TX-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`.toUpperCase(),
         symbol: newSymbol.toUpperCase().trim(),
@@ -358,20 +328,17 @@ const App: React.FC = () => {
   };
 
   if (authLoading) return null;
-
-  if (!user) {
-    return <LandingPage onLogin={handleLogin} />;
-  }
+  if (!user) return <LandingPage onLogin={handleLogin} />;
 
   if (isInitialLoad) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white p-6 text-center">
         <div className="relative">
           <div className="w-20 h-20 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-6"></div>
-          <Wallet className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-indigo-400" />
+          <Database className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-indigo-400" />
         </div>
-        <h2 className="text-2xl font-bold mb-2">Syncing Vault</h2>
-        <p className="text-slate-400">Loading multi-currency investment ledger...</p>
+        <h2 className="text-2xl font-bold mb-2">Connecting to Vault DB</h2>
+        <p className="text-slate-400">Initializing secure indexed storage...</p>
       </div>
     );
   }
@@ -392,8 +359,14 @@ const App: React.FC = () => {
               </div>
               <h1 className="text-lg font-bold text-slate-900 tracking-tight">WealthVault</h1>
             </div>
-            <div className="hidden md:flex items-center gap-1 text-[10px] font-bold px-2 py-1 bg-slate-50 border border-slate-100 rounded-full text-slate-400">
-              {isSyncing ? <><RefreshCw className="w-3 h-3 animate-spin text-indigo-500" /> CLOUD SYNC...</> : <><CloudCheck className="w-3 h-3 text-emerald-500" /> {user.email}</>}
+            <div className="hidden md:flex flex-col">
+              <div className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 bg-slate-50 border border-slate-100 rounded-full text-slate-400 group cursor-help relative">
+                {isSyncing ? <><RefreshCw className="w-3 h-3 animate-spin text-indigo-500" /> SYNCING...</> : <><Database className="w-3 h-3 text-emerald-500" /> LOCAL VAULT</>}
+                <div className="absolute top-full left-0 mt-2 w-48 p-2 bg-slate-800 text-white text-[9px] rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 shadow-xl leading-relaxed">
+                  <Info className="w-2 h-2 inline mr-1" /> Data is stored safely in your browser's IndexedDB. No cloud sync is active.
+                </div>
+              </div>
+              {lastSaved && !isSyncing && <span className="text-[8px] text-slate-300 font-bold ml-2 uppercase">Local Persistence Active</span>}
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -442,10 +415,10 @@ const App: React.FC = () => {
               <div className="space-y-3 mb-8">
                 <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
                   <div className="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center">
-                    <Fingerprint className="w-5 h-5 text-indigo-500" />
+                    <Database className="w-5 h-5 text-indigo-500" />
                   </div>
                   <div className="text-left">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vault Identity</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Local Database ID</p>
                     <p className="text-xs font-mono text-slate-600 truncate max-w-[180px]">{user.sub}</p>
                   </div>
                 </div>
@@ -454,14 +427,14 @@ const App: React.FC = () => {
                     <ShieldCheck className="w-5 h-5 text-emerald-500" />
                   </div>
                   <div className="text-left">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Security Status</p>
-                    <p className="text-xs font-bold text-slate-600">Active & Syncing</p>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Storage Status</p>
+                    <p className="text-xs font-bold text-slate-600">Encrypted Local Persistence</p>
                   </div>
                 </div>
               </div>
               <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 py-4 bg-slate-900 text-white font-bold rounded-2xl hover:bg-rose-600 transition-all group">
                 <LogOut className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-                Sign Out from Vault
+                Sign Out & Lock Vault
               </button>
             </div>
           </div>
@@ -579,7 +552,12 @@ const App: React.FC = () => {
                 <div className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded uppercase">Horizon: {projection.years}y</div>
               </div>
             </div>
-            <ProjectionChart data={projectionData} currencySymbol={curSym} />
+            <div className="relative group">
+               <div className="absolute top-0 right-0 p-2 bg-slate-800 text-white text-[9px] rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-10">
+                 Projection math based on monthly compounding.
+               </div>
+               <ProjectionChart data={projectionData} currencySymbol={curSym} />
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8">
               <div className="bg-indigo-600 p-5 rounded-2xl text-white shadow-lg">
                 <p className="text-[10px] font-bold text-indigo-200 uppercase mb-2">Projected Value</p>
