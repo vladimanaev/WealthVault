@@ -5,6 +5,7 @@ import { fetchMarketData, fetchTickerList, TickerGroup, fetchExchangeRates } fro
 import PortfolioCard from './components/PortfolioCard';
 import ProjectionChart from './components/ProjectionChart';
 import AllocationAnalytics from './components/AllocationAnalytics';
+import LandingPage from './components/LandingPage';
 import { 
   Plus, 
   TrendingUp, 
@@ -14,7 +15,6 @@ import {
   Sparkles, 
   ReceiptText,
   CloudCheck,
-  CloudUpload,
   RefreshCw,
   LogOut,
   ShieldCheck,
@@ -31,7 +31,8 @@ import {
   Zap,
   AlertTriangle,
   Scale,
-  PieChart as PieIcon
+  PieChart as PieIcon,
+  CloudUpload
 } from 'lucide-react';
 
 interface GoogleUser {
@@ -94,7 +95,6 @@ const App: React.FC = () => {
   useEffect(() => {
     const loadTickers = async () => {
       const cached = localStorage.getItem(CACHE_KEY_TICKERS);
-      // Fix: Ensure cached is a string before JSON.parse
       if (typeof cached === 'string' && cached !== '') {
         try {
           const parsed = JSON.parse(cached) as TickerGroup[];
@@ -107,28 +107,9 @@ const App: React.FC = () => {
       }
 
       const instantFallbacks: TickerGroup[] = [
-        { 
-          group: "Global Equity", 
-          options: [
-            { value: "VWRP", label: "VWRP - Vanguard FTSE All-World" },
-            { value: "SWDA", label: "SWDA - iShares Core MSCI World" }
-          ] 
-        },
-        {
-          group: "US Equity",
-          options: [
-            { value: "VUSA", label: "VUSA - Vanguard S&P 500" },
-            { value: "AAPL", label: "AAPL - Apple Inc." },
-            { value: "TBLA", label: "TBLA - Taboola.com Ltd." }
-          ]
-        },
-        {
-          group: "Bonds & Alternatives",
-          options: [
-            { value: "VAGS", label: "VAGS - Global Aggregate Bond" },
-            { value: "IGLT", label: "IGLT - UK Gilts ETF" }
-          ]
-        }
+        { group: "Global Equity", options: [{ value: "VWRP", label: "VWRP - Vanguard FTSE All-World" }, { value: "SWDA", label: "SWDA - iShares Core MSCI World" }] },
+        { group: "US Equity", options: [{ value: "VUSA", label: "VUSA - Vanguard S&P 500" }, { value: "AAPL", label: "AAPL - Apple Inc." }] },
+        { group: "Bonds & Alternatives", options: [{ value: "VAGS", label: "VAGS - Global Aggregate Bond" }, { value: "IGLT", label: "IGLT - UK Gilts ETF" }] }
       ];
       
       setTickerGroups(instantFallbacks);
@@ -224,7 +205,7 @@ const App: React.FC = () => {
     if (isRefreshingAll) return;
     setIsRefreshingAll(true);
     try {
-      const rates = await fetchExchangeRates('GBP');
+      const rates = await fetchExchangeRates(currency);
       setExchangeRates(rates);
       if (holdings.length > 0) {
         const uniqueSymbols = Array.from(new Set(holdings.map(h => h.symbol)));
@@ -273,14 +254,12 @@ const App: React.FC = () => {
   const portfolioMix = useMemo(() => {
     let stockVal = 0;
     let bondVal = 0;
-    
     holdings.forEach(h => {
       const val = h.shares * getConvertedPrice(h.nativePrice || h.currentPrice, h.originalCurrency || currency, currency);
       const isStable = /BOND|GILT|GOLD|CASH|VAGS|IGLT|VGOV/i.test(h.symbol);
       if (isStable) bondVal += val;
       else stockVal += val;
     });
-
     const total = stockVal + bondVal || 1;
     return { stockPct: stockVal / total, bondPct: bondVal / total, stockVal, bondVal };
   }, [holdings, currency, exchangeRates]);
@@ -301,15 +280,11 @@ const App: React.FC = () => {
   const sortedSymbols = useMemo(() => Object.keys(groupedHoldings).sort(), [groupedHoldings]);
 
   const updateAssetContribution = (symbol: string, value: number) => {
-    setHoldings(prev => prev.map(h => 
-      h.symbol === symbol ? { ...h, monthlyContribution: value } : h
-    ));
+    setHoldings(prev => prev.map(h => h.symbol === symbol ? { ...h, monthlyContribution: value } : h));
   };
 
   const updateTransaction = (id: string, shares: number, totalPaid: number) => {
-    setHoldings(prev => prev.map(h => 
-      h.id === id ? { ...h, shares, totalPaid } : h
-    ));
+    setHoldings(prev => prev.map(h => h.id === id ? { ...h, shares, totalPaid } : h));
     setEditingTransactionId(null);
   };
 
@@ -318,29 +293,32 @@ const App: React.FC = () => {
     let runningTotal = currentTotalValue;
     let runningContributions = 0;
     
+    // Day 0
     data.push({ year: 0, principal: currentTotalValue, totalValue: currentTotalValue, contributions: 0 });
-
+    
     for (let i = 1; i <= projection.years; i++) {
-      const monthlyRate = projection.annualReturnRate / 100 / 12;
+      const annualRate = projection.annualReturnRate / 100;
+      const monthlyRate = Math.pow(1 + annualRate, 1/12) - 1; // Effective monthly rate for CAGR accuracy
       
       for (let m = 0; m < 12; m++) {
-        runningTotal = (runningTotal + totalMonthlyContribution) * (1 + monthlyRate);
+        // Apply monthly growth and then add contribution
+        runningTotal = (runningTotal * (1 + monthlyRate)) + totalMonthlyContribution;
         runningContributions += totalMonthlyContribution;
       }
-
+      
+      // Black Swan Event Check
       if (scenariosActive && i > 0 && i % crashFrequency === 0) {
         const stockCrashPart = portfolioMix.stockPct * (crashSeverity * (riskSplit / 100));
         const bondCrashPart = portfolioMix.bondPct * (crashSeverity * ((100 - riskSplit) / 100));
-        const totalImpact = stockCrashPart + bondCrashPart;
-        
-        runningTotal = runningTotal * (1 - (totalImpact / 100));
+        const totalImpactPct = stockCrashPart + bondCrashPart;
+        runningTotal = runningTotal * (1 - (totalImpactPct / 100));
       }
-
+      
       data.push({
         year: i,
         principal: currentTotalValue,
         totalValue: Math.max(0, Math.round(runningTotal)),
-        contributions: runningContributions
+        contributions: Math.round(runningContributions)
       });
     }
     return data;
@@ -354,6 +332,7 @@ const App: React.FC = () => {
       const assetPrice = marketData?.price || 1;
       const assetCurrency = marketData?.currency || 'USD';
       
+      // Ensure totalPaid is converted back to base if it was entered in UI currency
       const newHolding: StockHolding = {
         id: `TX-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`.toUpperCase(),
         symbol: newSymbol.toUpperCase().trim(),
@@ -366,7 +345,6 @@ const App: React.FC = () => {
         lastUpdated: new Date().toISOString(),
         monthlyContribution: 0
       };
-      
       setHoldings(prev => [...prev, newHolding]);
       setNewSymbol(''); setNewShares(''); setNewTotalPaid('');
       setIsLogFormOpen(false);
@@ -379,34 +357,10 @@ const App: React.FC = () => {
     setHoldings(prev => prev.filter(h => h.id !== id));
   };
 
-  const finalProjection = projectionData[projectionData.length - 1];
-  const totalOutlay = currentTotalValue + finalProjection.contributions;
-  const simulatedProfit = finalProjection.totalValue - totalOutlay;
-  const isSimulatedProfit = simulatedProfit >= 0;
-
   if (authLoading) return null;
 
   if (!user) {
-    return (
-      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-6 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-600/10 blur-[120px] rounded-full -mr-40 -mt-40"></div>
-        <div className="max-w-md w-full relative z-10">
-          <div className="text-center mb-10">
-            <div className="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-indigo-900/20 rotate-3">
-              <TrendingUp className="text-white w-8 h-8" />
-            </div>
-            <h1 className="text-4xl font-black text-white mb-3 tracking-tight">WealthVault</h1>
-            <p className="text-slate-400 text-lg">Securely manage your multi-currency investment portfolio.</p>
-          </div>
-          <div className="bg-white/5 border border-white/10 p-8 rounded-[32px] backdrop-blur-xl shadow-2xl">
-            <button onClick={handleLogin} className="w-full bg-white text-slate-900 font-bold py-4 px-6 rounded-2xl hover:bg-slate-100 transition-all flex items-center justify-center gap-3">
-              Access Your Private Vault
-              <ChevronRight className="w-4 h-4 text-slate-400" />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <LandingPage onLogin={handleLogin} />;
   }
 
   if (isInitialLoad) {
@@ -421,6 +375,11 @@ const App: React.FC = () => {
       </div>
     );
   }
+
+  const finalProjection = projectionData[projectionData.length - 1];
+  const totalOutlay = currentTotalValue + finalProjection.contributions;
+  const simulatedProfit = finalProjection.totalValue - totalOutlay;
+  const isSimulatedProfit = simulatedProfit >= 0;
 
   return (
     <div className="min-h-screen pb-20 bg-slate-50">
@@ -440,13 +399,7 @@ const App: React.FC = () => {
           <div className="flex items-center gap-4">
             <div className="hidden sm:flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
               {(['GBP', 'USD', 'EUR'] as Currency[]).map((c) => (
-                <button
-                  key={c}
-                  onClick={() => setCurrency(c)}
-                  className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${
-                    currency === c ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'
-                  }`}
-                >
+                <button key={c} onClick={() => setCurrency(c)} className={`px-3 py-1 rounded-lg text-[10px] font-black transition-all ${currency === c ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                   {CURRENCY_MAP[c].label}
                 </button>
               ))}
@@ -460,20 +413,19 @@ const App: React.FC = () => {
               <span className="block text-[10px] text-slate-400 font-bold uppercase tracking-widest">Global Portfolio Value</span>
               <span className="text-xl font-black text-slate-900">{curSym}{currentTotalValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
             </div>
-            <div className="flex items-center gap-3 pl-2">
-              <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-2 p-1 pr-3 rounded-full hover:bg-slate-100 transition-all border border-transparent hover:border-slate-200">
-                <img src={user.picture} className="w-8 h-8 rounded-full border border-slate-200 shadow-sm" alt="Profile" />
-                <span className="hidden lg:block text-xs font-bold text-slate-700">{user.name.split(' ')[0]}</span>
-              </button>
-            </div>
+            <button onClick={() => setIsProfileModalOpen(true)} className="flex items-center gap-2 p-1 pr-3 rounded-full hover:bg-slate-100 transition-all border border-transparent hover:border-slate-200">
+              <img src={user.picture} className="w-8 h-8 rounded-full border border-slate-200 shadow-sm" alt="Profile" />
+              <span className="hidden lg:block text-xs font-bold text-slate-700">{user.name.split(' ')[0]}</span>
+            </button>
           </div>
         </div>
       </header>
 
+      {/* Profile Modal */}
       {isProfileModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setIsProfileModalOpen(false)} />
-          <div className="relative bg-white w-full max-sm rounded-[32px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+          <div className="relative bg-white w-full max-w-sm rounded-[32px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
             <div className="bg-indigo-600 h-24 relative">
               <button onClick={() => setIsProfileModalOpen(false)} className="absolute top-4 right-4 p-2 bg-white/10 hover:bg-white/20 text-white rounded-full transition-colors">
                 <X className="w-4 h-4" />
@@ -485,8 +437,7 @@ const App: React.FC = () => {
               </div>
               <h3 className="text-2xl font-black text-slate-900 tracking-tight mb-1">{user.name}</h3>
               <div className="flex items-center justify-center gap-1.5 text-slate-500 text-sm font-medium mb-6">
-                <Mail className="w-3.5 h-3.5" />
-                {user.email}
+                <Mail className="w-3.5 h-3.5" /> {user.email}
               </div>
               <div className="space-y-3 mb-8">
                 <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-2xl border border-slate-100">
@@ -534,16 +485,14 @@ const App: React.FC = () => {
             </button>
             <div className={`transition-all duration-300 ease-in-out ${isLogFormOpen ? 'max-h-[500px] opacity-100 p-6 pt-0 border-t border-slate-50' : 'max-h-0 opacity-0 pointer-events-none'}`}>
               <div className="space-y-4 mt-6">
-                <div className="relative">
-                  <select value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 font-medium">
-                    <option value="">-- Select Asset Ticker --</option>
-                    {tickerGroups.map((group, idx) => (
-                      <optgroup key={idx} label={group.group} className="font-bold">
-                        {group.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                      </optgroup>
-                    ))}
-                  </select>
-                </div>
+                <select value={newSymbol} onChange={(e) => setNewSymbol(e.target.value)} className="w-full px-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-700 font-medium">
+                  <option value="">-- Select Asset Ticker --</option>
+                  {tickerGroups.map((group, idx) => (
+                    <optgroup key={idx} label={group.group} className="font-bold">
+                      {group.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </optgroup>
+                  ))}
+                </select>
                 <div className="grid grid-cols-2 gap-4">
                   <input type="number" value={newShares} onChange={(e) => setNewShares(e.target.value)} placeholder="0 Shares" className="w-full px-4 py-2.5 border border-slate-200 rounded-xl" />
                   <input type="number" value={newTotalPaid} onChange={(e) => setNewTotalPaid(e.target.value)} placeholder={`Total Paid (${curSym})`} className="w-full px-4 py-2.5 border border-indigo-100 bg-indigo-50/20 rounded-xl font-bold text-indigo-900" />
@@ -566,42 +515,41 @@ const App: React.FC = () => {
               <div className="space-y-6">
                 {sortedSymbols.map(symbol => {
                   const items = groupedHoldings[symbol];
-                  const baseH = items[0];
-                  const livePrice = getConvertedPrice(baseH.nativePrice || baseH.currentPrice, baseH.originalCurrency || currency, currency);
                   const aggregateHolding: StockHolding = {
-                    ...baseH,
+                    ...items[0],
                     shares: items.reduce((sum, i) => sum + i.shares, 0),
                     totalPaid: items.reduce((sum, i) => sum + i.totalPaid, 0),
-                    currentPrice: livePrice
                   };
                   return (
                     <div key={symbol} className="space-y-3">
                       <PortfolioCard 
                         holding={aggregateHolding} 
-                        currencySymbol={curSym}
+                        currencySymbol={curSym} 
+                        baseCurrency={currency}
+                        exchangeRates={exchangeRates}
                         onRemove={() => setHoldings(prev => prev.filter(h => h.symbol !== symbol))} 
-                        onUpdateContribution={updateAssetContribution}
+                        onUpdateContribution={updateAssetContribution} 
                       />
                       <div className="ml-4 pl-4 border-l-2 border-slate-200 space-y-2">
-                         {items.map(h => (
-                           <div key={h.id} className="bg-white border border-slate-100 rounded-lg p-3 text-xs shadow-sm group">
-                             {editingTransactionId === h.id ? (
-                               <TransactionEditForm holding={h} currencySymbol={curSym} onSave={(s, t) => updateTransaction(h.id, s, t)} onCancel={() => setEditingTransactionId(null)} />
-                             ) : (
-                               <div className="flex items-center justify-between">
-                                 <div className="flex items-center gap-3">
-                                   <span className="font-mono text-[10px] text-slate-400">#{h.id.slice(-4)}</span>
-                                   <span className="font-bold text-slate-700">{h.shares.toLocaleString()} Shares</span>
-                                   <span className="text-slate-400">@ {curSym}{(h.totalPaid / h.shares).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
-                                 </div>
-                                 <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                   <button onClick={() => setEditingTransactionId(h.id)} className="p-1.5 text-slate-400 hover:text-indigo-600 rounded"><Edit2 className="w-3.5 h-3.5" /></button>
-                                   <button onClick={() => removeHolding(h.id)} className="p-1.5 text-slate-400 hover:text-rose-500 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
-                                 </div>
-                               </div>
-                             )}
-                           </div>
-                         ))}
+                        {items.map(h => (
+                          <div key={h.id} className="bg-white border border-slate-100 rounded-lg p-3 text-xs shadow-sm group">
+                            {editingTransactionId === h.id ? (
+                              <TransactionEditForm holding={h} currencySymbol={curSym} onSave={(s, t) => updateTransaction(h.id, s, t)} onCancel={() => setEditingTransactionId(null)} />
+                            ) : (
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <span className="font-mono text-[10px] text-slate-400">#{h.id.slice(-4)}</span>
+                                  <span className="font-bold text-slate-700">{h.shares.toLocaleString()} Shares</span>
+                                  <span className="text-slate-400">@ {curSym}{(h.totalPaid / h.shares).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                </div>
+                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <button onClick={() => setEditingTransactionId(h.id)} className="p-1.5 text-slate-400 hover:text-indigo-600 rounded"><Edit2 className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => removeHolding(h.id)} className="p-1.5 text-slate-400 hover:text-rose-500 rounded"><Trash2 className="w-3.5 h-3.5" /></button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   );
@@ -614,17 +562,10 @@ const App: React.FC = () => {
         <div className="lg:col-span-8 space-y-6">
           <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4">
             <div className="flex items-center gap-2 mb-4">
-              <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
-                <PieIcon className="w-4 h-4" />
-              </div>
+              <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg"><PieIcon className="w-4 h-4" /></div>
               <h2 className="text-sm font-bold text-slate-900">Allocation Analytics</h2>
             </div>
-            <AllocationAnalytics 
-              holdings={holdings} 
-              exchangeRates={exchangeRates} 
-              baseCurrency={currency} 
-              currencySymbol={curSym} 
-            />
+            <AllocationAnalytics holdings={holdings} exchangeRates={exchangeRates} baseCurrency={currency} currencySymbol={curSym} />
           </section>
 
           <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
@@ -634,11 +575,7 @@ const App: React.FC = () => {
                 <h2 className="text-xl font-bold text-slate-900">Compound Forecast</h2>
               </div>
               <div className="flex items-center gap-2">
-                {scenariosActive && (
-                  <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-1 rounded uppercase flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" /> Scenarios Active
-                  </span>
-                )}
+                {scenariosActive && <span className="text-[10px] font-bold text-rose-500 bg-rose-50 px-2 py-1 rounded uppercase flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Scenarios Active</span>}
                 <div className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-2 py-1 rounded uppercase">Horizon: {projection.years}y</div>
               </div>
             </div>
@@ -669,15 +606,11 @@ const App: React.FC = () => {
                     <p className="text-slate-400 text-xs">Configure timeline and return expectations</p>
                   </div>
                 </div>
-                <button 
-                  onClick={() => setScenariosActive(!scenariosActive)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${scenariosActive ? 'bg-rose-500 text-white' : 'bg-white/10 text-slate-400 hover:bg-white/20'}`}
-                >
+                <button onClick={() => setScenariosActive(!scenariosActive)} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${scenariosActive ? 'bg-rose-500 text-white' : 'bg-white/10 text-slate-400 hover:bg-white/20'}`}>
                   {scenariosActive ? <ZapOff className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
                   {scenariosActive ? 'Disable Scenarios' : 'Enable Scenarios'}
                 </button>
               </div>
-              
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-10">
                 <div className="space-y-10">
                   <div>
@@ -689,7 +622,6 @@ const App: React.FC = () => {
                     <input type="range" min="1" max="50" value={projection.years} onChange={(e) => setProjection({...projection, years: Number(e.target.value)})} className="w-full accent-blue-500" />
                   </div>
                 </div>
-
                 <div className={`space-y-8 transition-all duration-500 ${scenariosActive ? 'opacity-100 translate-x-0' : 'opacity-30 pointer-events-none translate-x-4'}`}>
                   <div className="grid grid-cols-2 gap-6">
                     <div>
@@ -707,46 +639,12 @@ const App: React.FC = () => {
                       </div>
                     </div>
                   </div>
-
                   <div className="pt-4 border-t border-white/10">
                     <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <Scale className="w-3.5 h-3.5 text-indigo-400" />
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Crash Impact Split</label>
-                      </div>
-                      <div className="flex gap-3 text-[10px] font-black uppercase">
-                        <span className="text-rose-400">Equity: {riskSplit}%</span>
-                        <span className="text-emerald-400">Stable: {100 - riskSplit}%</span>
-                      </div>
+                      <div className="flex items-center gap-2"><Scale className="w-3.5 h-3.5 text-indigo-400" /><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Crash Impact Split</label></div>
+                      <div className="flex gap-3 text-[10px] font-black uppercase"><span className="text-rose-400">Equity: {riskSplit}%</span><span className="text-emerald-400">Stable: {100 - riskSplit}%</span></div>
                     </div>
-                    <input 
-                      type="range" min="0" max="100" step="5" 
-                      value={riskSplit} 
-                      onChange={(e) => setRiskSplit(Number(e.target.value))} 
-                      className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" 
-                    />
-                    <div className="flex justify-between mt-2 text-[9px] font-medium text-slate-500 italic">
-                      <span>Equities suffer more</span>
-                      <span>Balanced impact</span>
-                      <span>Bonds suffer more</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-12 pt-8 border-t border-white/5 grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="p-5 bg-white/5 rounded-2xl border border-white/10">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block mb-3">Total Monthly Funding</label>
-                  <p className="text-white font-black text-3xl">{curSym}{totalMonthlyContribution.toLocaleString()}</p>
-                </div>
-                <div className="p-4 bg-white/5 rounded-2xl border border-white/10 flex flex-col justify-center">
-                   <div className="flex justify-between items-center mb-2">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Current Allocation</p>
-                    <p className="text-[9px] font-black text-indigo-300">{(portfolioMix.stockPct * 100).toFixed(0)}% EQ / {(portfolioMix.bondPct * 100).toFixed(0)}% ST</p>
-                   </div>
-                  <div className="h-2 w-full bg-slate-800 rounded-full flex overflow-hidden">
-                    <div className="bg-rose-500 transition-all duration-500" style={{ width: `${portfolioMix.stockPct * 100}%` }}></div>
-                    <div className="bg-emerald-500 transition-all duration-500" style={{ width: `${portfolioMix.bondPct * 100}%` }}></div>
+                    <input type="range" min="0" max="100" step="5" value={riskSplit} onChange={(e) => setRiskSplit(Number(e.target.value))} className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500" />
                   </div>
                 </div>
               </div>

@@ -1,21 +1,39 @@
 
-import React from 'react';
-import { StockHolding } from '../types';
+import React, { useMemo } from 'react';
+import { StockHolding, ExchangeRates } from '../types';
 import { Trash2, TrendingUp, TrendingDown, PlusCircle, Globe } from 'lucide-react';
 
 interface PortfolioCardProps {
   holding: StockHolding;
   currencySymbol: string;
+  baseCurrency: string;
+  exchangeRates: ExchangeRates;
   onRemove: (symbol: string) => void;
   onUpdateContribution: (symbol: string, value: number) => void;
 }
 
-const PortfolioCard: React.FC<PortfolioCardProps> = ({ holding, currencySymbol, onRemove, onUpdateContribution }) => {
-  // All calculations here use the pre-converted values provided by parent App
-  const currentMarketValue = holding.shares * holding.currentPrice;
-  const totalCost = holding.totalPaid;
+const PortfolioCard: React.FC<PortfolioCardProps> = ({ 
+  holding, 
+  currencySymbol, 
+  baseCurrency,
+  exchangeRates,
+  onRemove, 
+  onUpdateContribution 
+}) => {
+  // Calculate display price based on current exchange rates
+  const displayCurrentPrice = useMemo(() => {
+    const from = holding.originalCurrency || 'USD';
+    const native = holding.nativePrice || holding.currentPrice;
+    if (from === baseCurrency) return native;
+    
+    // Convert native price to base currency using exchange rates
+    const priceInBase = native / (exchangeRates[from] || 1);
+    return priceInBase * (exchangeRates[baseCurrency] || 1);
+  }, [holding, baseCurrency, exchangeRates]);
+
+  const currentMarketValue = holding.shares * displayCurrentPrice;
+  const totalCost = holding.totalPaid; // This is assumed to be stored in the user's primary base currency
   const profitLoss = currentMarketValue - totalCost;
-  const purchasePricePerShare = totalCost / holding.shares;
   const contribution = holding.monthlyContribution || 0;
   
   const isProfit = profitLoss >= 0;
@@ -27,7 +45,7 @@ const PortfolioCard: React.FC<PortfolioCardProps> = ({ holding, currencySymbol, 
           <div className="flex items-center gap-2">
             <h3 className="text-xl font-bold text-slate-900">{holding.symbol.toUpperCase()}</h3>
             <span className="px-2 py-0.5 bg-indigo-50 text-[10px] font-bold text-indigo-600 rounded uppercase">
-              {currencySymbol}{holding.currentPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+              {currencySymbol}{displayCurrentPrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
           </div>
           <div className="flex items-center flex-wrap gap-2 mt-1 text-slate-500">
